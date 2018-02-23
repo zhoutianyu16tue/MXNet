@@ -14,13 +14,19 @@ import mxnet as mx
 
 def default_read_content(path):
     with open(path) as ins:
-        content = ins.read()
-        content = content.replace('\n', ' <eos> ').replace('. ', ' <eos> ')
+        content = ins.read()[:-1]
+        content = content.replace('\n', ',')
         return content
 
+def default_read_content_gen_data(path):
+    with open(path) as ins:
+        return ins.read()[:-1]
+    
 def default_build_vocab(path):
     content = default_read_content(path)
-    content = content.split(' ') 
+    content = content.split(',')
+    return map(lambda d: int(d), set(content))
+    
     idx = 1 # 0 is left for zero-padding
     the_vocab = {}
     the_vocab[' '] = 0 # put a dummy element here so that len(vocab) is correct
@@ -107,25 +113,20 @@ class DummyIter(mx.io.DataIter):
 class BucketSentenceIter(mx.io.DataIter):
     def __init__(self, path, vocab, buckets, batch_size,
                  init_states, data_name='data', label_name='label',
-                 seperate_char=' <eos> ', text2id=None, read_content=None,
+                 read_content=default_read_content_gen_data,
                  time_major=True):
+        
         super(BucketSentenceIter, self).__init__()
 
-        if text2id is None:
-            self.text2id = default_text2id
-        else:
-            self.text2id = text2id
         if read_content is None:
             self.read_content = default_read_content
         else:
             self.read_content = read_content
+            
         content = self.read_content(path)
-        sentences = content.split(seperate_char)
+        
+        paths = content.split('\n')
 
-        if len(buckets) == 0:
-            buckets = default_gen_buckets(sentences, batch_size, vocab)
-
-        self.vocab_size = len(vocab)
         self.data_name = data_name
         self.label_name = label_name
         self.time_major = time_major
@@ -137,23 +138,27 @@ class BucketSentenceIter(mx.io.DataIter):
         # pre-allocate with the largest bucket for better memory sharing
         self.default_bucket_key = max(buckets)
 
-        for sentence in sentences:
-            sentence = self.text2id(sentence, vocab)
-            if len(sentence) == 0:
+        for path in paths:
+            path = map(lambda d: int(d), path.split(','))
+            
+            if len(path) == 0:
                 continue
+                
             for i, bkt in enumerate(buckets):
-                if bkt >= len(sentence):
-                    self.data[i].append(sentence)
+                if bkt >= len(path):
+                    self.data[i].append(path)
                     break
             # we just ignore the sentence it is longer than the maximum
             # bucket size here
 
         # convert data into ndarrays for better speed during training
         data = [np.zeros((len(x), buckets[i])) for i, x in enumerate(self.data)]
+        
         for i_bucket in range(len(self.buckets)):
             for j in range(len(self.data[i_bucket])):
-                sentence = self.data[i_bucket][j]
-                data[i_bucket][j, :len(sentence)] = sentence
+                
+                path = self.data[i_bucket][j]
+                data[i_bucket][j, :len(path)] = path
         self.data = data
 
         # Get the size of each bucket, so that we could sample
